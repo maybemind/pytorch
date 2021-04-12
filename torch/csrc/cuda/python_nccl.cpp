@@ -10,6 +10,7 @@
 #include <ATen/core/functional.h>
 
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/util/irange.h>
 
 #include <sstream>
 #include <unordered_map>
@@ -79,7 +80,7 @@ static std::vector<ncclComm_t> unpack_comms(PyObject* obj, size_t size) {
       throw python_error();
     auto size = PySequence_Fast_GET_SIZE(seq.get());
     comms = std::vector<ncclComm_t>(size);
-    for (int64_t i = 0; i < size; i++) {
+    for(const auto i : c10::irange(size)) {
       comms[i] = unpack_nccl_comm(PySequence_Fast_GET_ITEM(seq.get(), i));
     }
   }
@@ -199,7 +200,9 @@ PyObject* THCPModule_nccl_broadcast(PyObject* self, PyObject* args) {
         nullptr,
         "nccl_broadcast",
         1,
-        "(sequence[Tensor] inputs, int root)");
+        "(sequence[Tensor] inputs, int root"
+        " sequence[torch.cuda.Stream] streams,"
+        " sequence[torch.cuda.nccl.Communicator] comms)");
     return nullptr;
   }
 
@@ -228,7 +231,9 @@ PyObject* THCPModule_nccl_all_gather(PyObject* self, PyObject* args) {
         nullptr,
         "nccl_all_gather",
         1,
-        "(sequence[Tensor] inputs, sequence[Tensor] outputs");
+        "(sequence[Tensor] inputs, sequence[Tensor] outputs"
+        " sequence[torch.cuda.Stream] streams,"
+        " sequence[torch.cuda.nccl.Communicator] comms)");
     return nullptr;
   }
 
@@ -258,7 +263,9 @@ PyObject* THCPModule_nccl_reduce_scatter(PyObject* self, PyObject* args) {
         nullptr,
         "nccl_reduce_scatter",
         1,
-        "(sequence[Tensor] inputs, sequence[Tensor] outputs, int op");
+        "(sequence[Tensor] inputs, sequence[Tensor] outputs, int op"
+        " sequence[torch.cuda.Stream] streams,"
+        " sequence[torch.cuda.nccl.Communicator] comms)");
     return nullptr;
   }
 

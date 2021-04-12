@@ -1,8 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
-
 import functools
 import os
 import unittest
@@ -83,6 +78,7 @@ def disableScriptTest():
             return func(self)
         return wrapper
     return script_dec
+
 
 # skips tests for opset_versions listed in unsupported_opset_versions.
 # if the caffe2 test cannot be run for a specific version, add this wrapper

@@ -518,16 +518,17 @@ static void slow_conv3d_backward_parameters_out_cpu_template(
 
 } // namespace
 
-std::tuple<Tensor&, Tensor&, Tensor&> slow_conv3d_forward_out_cpu(
+std::tuple<Tensor&, Tensor&, Tensor&> slow_conv3d_forward_out_cpu(const Tensor& self,
+    const Tensor& weight,
+    IntArrayRef kernel_size, const c10::optional<Tensor>& bias_opt,
+    IntArrayRef stride,
+    IntArrayRef padding,
     Tensor& output,
     Tensor& finput,
-    Tensor& fgrad_input,
-    const Tensor& self,
-    const Tensor& weight,
-    IntArrayRef kernel_size,
-    const Tensor& bias,
-    IntArrayRef stride,
-    IntArrayRef padding) {
+    Tensor& fgrad_input) {
+  // See [Note: hacky wrapper removal for optional tensor]
+  const Tensor& bias = c10::value_or_else(bias_opt, [] {return Tensor();});
+
   const int64_t kernel_depth = kernel_size[0];
   const int64_t kernel_height = kernel_size[1];
   const int64_t kernel_width = kernel_size[2];
@@ -581,9 +582,15 @@ std::tuple<Tensor&, Tensor&, Tensor&> slow_conv3d_forward_out_cpu(
       (input_width + 2 * pad_width - kernel_width) / stride_width + 1;
 
   const int64_t batch_size = input.size(0);
-  finput.resize_({batch_size,
-                  n_input_plane * kernel_depth * kernel_height * kernel_width,
-                  output_depth * output_height * output_width});
+  if ((kernel_depth == 1) && (kernel_height == 1) && (kernel_width == 1) &&
+      (pad_depth == 0) && (pad_height == 0) && (pad_width == 0) &&
+      (stride_depth == 1) && (stride_height == 1) && (stride_width == 1) && (groups == 1)) {
+    finput = input.view({batch_size, n_input_plane, output_height * output_width * output_depth}).detach();
+  } else {
+    finput.resize_({batch_size,
+                    n_input_plane * kernel_depth * kernel_height * kernel_width,
+                    output_depth * output_height * output_width});
+  }
   output.resize_(
       {batch_size, n_output_plane, output_depth, output_height, output_width});
 
@@ -627,38 +634,39 @@ std::tuple<Tensor&, Tensor&, Tensor&> slow_conv3d_forward_out_cpu(
 std::tuple<Tensor, Tensor, Tensor> slow_conv3d_forward_cpu(
     const Tensor& self,
     const Tensor& weight,
-    IntArrayRef kernel_size,
-    const Tensor& bias,
+    IntArrayRef kernel_size, const c10::optional<Tensor>& bias_opt,
     IntArrayRef stride,
     IntArrayRef padding) {
+  // See [Note: hacky wrapper removal for optional tensor]
+  const Tensor& bias = c10::value_or_else(bias_opt, [] {return Tensor();});
+
   auto output = at::empty({0}, self.options());
   auto finput = at::empty({0}, self.options());
   auto fgrad_input = at::empty({0}, self.options());
-  slow_conv3d_forward_out_cpu(
-      output,
-      finput,
-      fgrad_input,
+  at::native::slow_conv3d_forward_out_cpu(
       self,
       weight,
       kernel_size,
       bias,
       stride,
-      padding);
+      padding,
+      output,
+      finput,
+      fgrad_input);
   return std::make_tuple(output, finput, fgrad_input);
 }
 
-std::tuple<Tensor&, Tensor&, Tensor&> slow_conv3d_backward_out_cpu(
-    Tensor& grad_input,
-    Tensor& grad_weight,
-    Tensor& grad_bias,
-    const Tensor& grad_output,
+std::tuple<Tensor&, Tensor&, Tensor&> slow_conv3d_backward_out_cpu(const Tensor& grad_output,
     const Tensor& self,
     const Tensor& weight,
     IntArrayRef kernel_size,
     IntArrayRef stride,
     IntArrayRef padding,
     const Tensor& finput,
-    const Tensor& fgrad_input) {
+    const Tensor& fgrad_input,
+    Tensor& grad_input,
+    Tensor& grad_weight,
+    Tensor& grad_bias) {
   // TODO: hacky way of determine the group size
   int64_t groups = self.size(1) / weight.size(1);
   if (grad_input.defined()) {
@@ -730,10 +738,7 @@ std::tuple<Tensor, Tensor, Tensor> slow_conv3d_backward_cpu(
     grad_bias = at::empty({0}, grad_output.options());
   }
 
-  slow_conv3d_backward_out_cpu(
-      grad_input,
-      grad_weight,
-      grad_bias,
+  at::native::slow_conv3d_backward_out_cpu(
       grad_output,
       self,
       weight,
@@ -741,19 +746,23 @@ std::tuple<Tensor, Tensor, Tensor> slow_conv3d_backward_cpu(
       stride,
       padding,
       finput,
-      fgrad_input);
+      fgrad_input,
+      grad_input,
+      grad_weight,
+      grad_bias);
 
   return std::make_tuple(grad_input, grad_weight, grad_bias);
 }
 
-Tensor& slow_conv3d_out(
-    Tensor& output,
-    const Tensor& self,
+Tensor& slow_conv3d_out(const Tensor& self,
     const Tensor& weight,
-    IntArrayRef kernel_size,
-    const Tensor& bias,
+    IntArrayRef kernel_size, const c10::optional<Tensor>& bias_opt,
     IntArrayRef stride,
-    IntArrayRef padding) {
+    IntArrayRef padding,
+    Tensor& output) {
+  // See [Note: hacky wrapper removal for optional tensor]
+  const Tensor& bias = c10::value_or_else(bias_opt, [] {return Tensor();});
+
   Tensor finput = at::empty({0}, self.options());
   Tensor fgrad_input = at::empty({0}, self.options());
   return std::get<0>(at::slow_conv3d_forward_out(
@@ -771,10 +780,12 @@ Tensor& slow_conv3d_out(
 Tensor slow_conv3d(
     const Tensor& self,
     const Tensor& weight,
-    IntArrayRef kernel_size,
-    const Tensor& bias,
+    IntArrayRef kernel_size, const c10::optional<Tensor>& bias_opt,
     IntArrayRef stride,
     IntArrayRef padding) {
+  // See [Note: hacky wrapper removal for optional tensor]
+  const Tensor& bias = c10::value_or_else(bias_opt, [] {return Tensor();});
+
   return std::get<0>(at::slow_conv3d_forward(
       self, weight, kernel_size, bias, stride, padding));
 }

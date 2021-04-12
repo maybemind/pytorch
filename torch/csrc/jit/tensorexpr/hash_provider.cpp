@@ -230,8 +230,15 @@ void HashProvider::visit(const IfThenElse* v) {
           hashOf(v->false_value())));
 }
 
-void HashProvider::visit(const BaseCallNode* v) {
+void HashProvider::visit(const Intrinsics* v) {
   CACHE_GUARD();
+  // calls to rand are not symbolic and have a different value each time, they
+  // should not hash to anything and this is the best we can do.
+  if (v->op_type() == kRand) {
+    putHash(v, (SimplifierHashType)rand());
+    return;
+  }
+
   SimplifierHashType hash(te_hash(v->func_name()));
   for (int i = 0; i < v->nparams(); i++) {
     v->param(i)->accept(this);
@@ -310,6 +317,39 @@ void HashProvider::visit(const Polynomial* v) {
 
   putHash(v, hash);
 }
+
+void HashProvider::visit(const MaxTerm* v) {
+  CACHE_GUARD();
+  SimplifierHashType hash = hash_combine("maxterm");
+  if (v->scalar()) {
+    v->scalar()->accept(this);
+    hash = hash_combine(hash, hashOf(v->scalar()));
+  }
+
+  for (auto* c : v->variables()) {
+    c->accept(this);
+    hash = hash_combine(hash, hashOf(c));
+  }
+
+  putHash(v, hash);
+}
+
+void HashProvider::visit(const MinTerm* v) {
+  CACHE_GUARD();
+  SimplifierHashType hash = hash_combine("minterm");
+  if (v->scalar()) {
+    v->scalar()->accept(this);
+    hash = hash_combine(hash, hashOf(v->scalar()));
+  }
+
+  for (auto* c : v->variables()) {
+    c->accept(this);
+    hash = hash_combine(hash, hashOf(c));
+  }
+
+  putHash(v, hash);
+}
+
 } // namespace tensorexpr
 } // namespace jit
 } // namespace torch

@@ -67,8 +67,9 @@ bool containsTensorType(const TypePtr& t) {
 
 class ShapePropagator {
  public:
-  explicit ShapePropagator(std::shared_ptr<Graph> graph) : aliasDb_(graph) {
-    collectResizeSet(std::move(graph)->block());
+  explicit ShapePropagator(const std::shared_ptr<Graph>& graph)
+      : aliasDb_(graph) {
+    collectResizeSet(graph->block());
   }
 
   void PropagateShapeOnBlock(Block* block, bool insert_expands = true) {
@@ -882,7 +883,7 @@ class ShapePropagator {
             "aten::trunc(Tensor self) -> Tensor",
             "aten::rot90(Tensor self, int k, int[] dims) -> Tensor",
             "aten::narrow(Tensor self, int dim, int start, int length) -> Tensor",
-            "aten::slice(Tensor self, int dim, int start, int end, int step) -> Tensor",
+            "aten::slice(Tensor self, int dim, int? start=0, int? end=9223372036854775807, int step=1) -> Tensor",
             "aten::alias(Tensor self) -> Tensor",
         },
         [](Node* node) -> type_vec_t {
@@ -1208,6 +1209,7 @@ class ShapePropagator {
             "aten::max(Tensor self) -> Tensor",
             "aten::min(Tensor self) -> Tensor",
             "aten::median(Tensor self) -> Tensor",
+            "aten::nanmedian(Tensor self) -> Tensor",
             "aten::norm(Tensor self, Scalar p) -> Tensor",
             "aten::std(Tensor self, bool unbiased) -> Tensor",
             "aten::trace(Tensor self) -> Tensor",
@@ -1268,9 +1270,10 @@ class ShapePropagator {
                       type->withScalarType(maybe_dtype_option->toScalarType())};
                 }
                 if (type->scalarType()) {
-                  return {at::isFloatingType(*type->scalarType())
-                              ? type
-                              : type->withScalarType(at::kLong)};
+                  return {
+                      at::isFloatingType(*type->scalarType())
+                          ? type
+                          : type->withScalarType(at::kLong)};
                 } else {
                   return {type};
                 }
@@ -1354,6 +1357,7 @@ class ShapePropagator {
             "aten::max(Tensor self, int dim, bool keepdim) -> (Tensor, Tensor)",
             "aten::min(Tensor self, int dim, bool keepdim) -> (Tensor, Tensor)",
             "aten::median(Tensor self, int dim, bool keepdim) -> (Tensor, Tensor)",
+            "aten::nanmedian(Tensor self, int dim, bool keepdim) -> (Tensor, Tensor)",
             "aten::mode(Tensor self, int dim, bool keepdim) -> (Tensor, Tensor)",
         },
         [](Node* node) -> type_vec_t {
@@ -2106,12 +2110,12 @@ class ShapePropagator {
             "aten::expand(Tensor self, int[] size, *, bool implicit) -> Tensor",
             /*const_inputs=*/attr::size)) {
       auto tp = tensor_types.at(0);
-      std::vector<int64_t> sizes, strides;
-      std::tie(sizes, strides) = at::inferExpandGeometry(
+      auto sizesAndStrides = at::inferExpandGeometry_dimvector(
           tp->sizes().concrete_sizes().value(),
           tp->strides().concrete_sizes().value(),
           node->get<c10::List<int64_t>>(attr::size).value().vec());
-      node->output()->setType(tp->withSizesStrides(sizes, strides));
+      node->output()->setType(tp->withSizesStrides(
+          std::get<0>(sizesAndStrides), std::get<1>(sizesAndStrides)));
       return true;
     } else if (
         node->matches(

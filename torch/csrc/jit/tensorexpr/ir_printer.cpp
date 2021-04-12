@@ -1,6 +1,5 @@
 #include <torch/csrc/jit/tensorexpr/ir_printer.h>
 
-#include <torch/csrc/jit/tensorexpr/function.h>
 #include <torch/csrc/jit/tensorexpr/ir_simplifier.h>
 #include <torch/csrc/jit/tensorexpr/reduction.h>
 #include <torch/csrc/jit/tensorexpr/tensor.h>
@@ -176,7 +175,7 @@ void IRPrinter::visit(const CompareSelect* v) {
 }
 
 static void formatFPSuffix(std::ostream& os, double v) {
-  // No suffix for doubles.
+  os << (v == std::ceil(v) ? ".0" : "");
 }
 
 template <typename T>
@@ -259,19 +258,8 @@ void IRPrinter::visit(const IfThenElse* v) {
        << *v->false_value() << ")";
 }
 
-void IRPrinter::visit(const BaseCallNode* v) {
+void IRPrinter::visit(const Intrinsics* v) {
   os() << v->func_name() << "(";
-  for (int i = 0; i < v->nparams(); i++) {
-    if (i > 0) {
-      os() << ", ";
-    }
-    os() << *v->param(i);
-  }
-  os() << ")";
-}
-
-void IRPrinter::visit(const FunctionCall* v) {
-  os() << *v->tensor()->buf() << "(";
   for (int i = 0; i < v->nparams(); i++) {
     if (i > 0) {
       os() << ", ";
@@ -318,23 +306,41 @@ void IRPrinter::visit(const RoundOff* v) {
   os() << ")";
 }
 
-void IRPrinter::visit(const ReduceOp* v) {
-  os() << "ReduceOp(";
-  os() << *v->accumulator() << ", ";
-  os() << v->complete() << ", ";
-
-  bool first = true;
-  os() << "out_args={";
-  for (auto* d : v->output_args()) {
-    if (!first) {
+void IRPrinter::visit(const MaxTerm* v) {
+  os() << "MaxTerm(";
+  if (v->scalar()) {
+    v->scalar()->accept(this);
+    os() << ", ";
+  }
+  for (size_t i = 0; i < v->variables().size(); ++i) {
+    v->variables()[i]->accept(this);
+    if (i < v->variables().size() - 1) {
       os() << ", ";
     }
-    os() << *d;
-    first = false;
   }
-  os() << "}, ";
+  os() << ")";
+}
 
-  first = true;
+void IRPrinter::visit(const MinTerm* v) {
+  os() << "MinTerm(";
+  if (v->scalar()) {
+    v->scalar()->accept(this);
+    os() << ", ";
+  }
+  for (size_t i = 0; i < v->variables().size(); ++i) {
+    v->variables()[i]->accept(this);
+    if (i < v->variables().size() - 1) {
+      os() << ", ";
+    }
+  }
+  os() << ")";
+}
+
+void IRPrinter::visit(const ReduceOp* v) {
+  os() << "ReduceOp(";
+  os() << *v->body() << ", ";
+
+  bool first = true;
   os() << "reduce_args={";
   for (auto* d : v->reduce_args()) {
     if (!first) {
@@ -412,8 +418,9 @@ void IRPrinter::visit(const Block* v) {
 
 void IRPrinter::visit(const Allocate* v) {
   emitIndent();
-  os() << "Allocate(" << *v->buffer_var() << ", " << v->dtype().ToCppString();
-  os() << ", {";
+  os() << "Allocate(" << *v->buffer_var()
+       << "); // dtype=" << v->dtype().ToCppString();
+  os() << ", dims=[";
   const std::vector<const Expr*>& dims = v->dims();
   for (size_t i = 0; i < dims.size(); i++) {
     if (i != 0) {
@@ -421,7 +428,7 @@ void IRPrinter::visit(const Allocate* v) {
     }
     os() << *dims[i];
   }
-  os() << "});" << std::endl;
+  os() << "]" << std::endl;
 }
 
 void IRPrinter::visit(const Free* v) {
@@ -478,6 +485,30 @@ void IRPrinter::visit(const SyncThreads* v) {
   os() << "__syncthreads();\n";
 }
 
+void IRPrinter::visit(const ExternalCall* v) {
+  emitIndent();
+  os() << *v->buf() << " = " << v->func_name() << "(";
+
+  os() << "buf_args={";
+  int i = 0;
+  for (const Buf* buf_arg : v->buf_args()) {
+    if (i++ > 0) {
+      os() << ", ";
+    }
+    os() << *buf_arg;
+  }
+
+  os() << "}, args={";
+  i = 0;
+  for (const Expr* arg : v->args()) {
+    if (i++ > 0) {
+      os() << ", ";
+    }
+    os() << *arg;
+  }
+  os() << "})" << std::endl;
+}
+
 void IRPrinter::emitIndent() {
   os() << std::setw(2 * indent_) << "";
 }
@@ -523,11 +554,6 @@ std::ostream& operator<<(std::ostream& stream, const Tensor& t) {
   return stream;
 }
 
-std::ostream& operator<<(std::ostream& stream, const Function& f) {
-  stream << std::to_string(&f);
-  return stream;
-}
-
 void print(const Expr* expr) {
   if (expr) {
     IRPrinter p(std::cout);
@@ -535,6 +561,7 @@ void print(const Expr* expr) {
   } else {
     std::cout << "(null expr)";
   }
+  std::cout << "\n";
 }
 
 void print(const Stmt* stmt) {
@@ -548,10 +575,6 @@ void print(const Stmt* stmt) {
 
 void print(const Tensor* t) {
   std::cout << std::to_string(t);
-}
-
-void print(const Function* f) {
-  std::cout << std::to_string(f);
 }
 
 } // namespace tensorexpr
@@ -576,34 +599,15 @@ std::string to_string(const Tensor* t) {
     return "(null tensor)\n";
   }
   std::ostringstream oss;
-  oss << "Tensor " << t->buf()->name_hint() << "(";
-  for (size_t i = 0; i < t->ndim(); i++) {
+  // TODO: move this to Buf printer
+  oss << "Tensor " << t->buf()->name_hint() << "[";
+  for (size_t i = 0; i < t->buf()->ndim(); i++) {
     if (i != 0) {
       oss << ", ";
     }
-    oss << *t->arg(i) << "[" << *t->dim(i) << "]";
+    oss << *t->buf()->dim(i);
   }
-  oss << ") = " << *t->body() << "\n";
-  return oss.str();
-}
-
-std::string to_string(const Function* f) {
-  if (!f) {
-    return "(null function)\n";
-  }
-  std::ostringstream oss;
-  oss << "Function F(";
-  for (size_t i = 0; i < f->ndim(); i++) {
-    if (i != 0) {
-      oss << ", ";
-    }
-    oss << *f->arg(i) << "[" << *f->dim(i) << "]";
-  }
-  oss << ") {\n";
-  for (size_t i = 0; i < f->bodies().size(); i++) {
-    oss << "  " << *f->func_var(i) << " = " << *f->body(i) << "\n";
-  }
-  oss << "}\n";
+  oss << "]:\n" << *t->stmt() << "\n";
   return oss.str();
 }
 } // namespace std

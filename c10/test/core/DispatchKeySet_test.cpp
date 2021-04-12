@@ -88,10 +88,10 @@ TEST(DispatchKeySet, IteratorFull) {
   DispatchKeySet full_set(DispatchKeySet::FULL);
   uint8_t i = 0;
 
-  for (auto it = full_set.begin(); it != full_set.end(); ++it) {
+  for (const auto& it : full_set) {
     i++;
-    ASSERT_TRUE(*it == static_cast<DispatchKey>(i));
-    ASSERT_TRUE(*it != DispatchKey::NumDispatchKeys);
+    ASSERT_TRUE(it == static_cast<DispatchKey>(i));
+    ASSERT_TRUE(it != DispatchKey::NumDispatchKeys);
   }
   ASSERT_EQ(i, static_cast<uint8_t>(DispatchKey::NumDispatchKeys) - 1);
 }
@@ -111,6 +111,7 @@ TEST(DispatchKeySet, IteratorRangeFull) {
 
 TEST(DispatchKeySet, SpecificKeys) {
   DispatchKeySet keyset({
+      static_cast<DispatchKey>(0), // Undefined should be ignored
       static_cast<DispatchKey>(4),
       static_cast<DispatchKey>(10),
       static_cast<DispatchKey>(15),
